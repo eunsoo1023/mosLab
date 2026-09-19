@@ -1,5 +1,29 @@
 #include "minios/kernel.h"
 
+#include <stdlib.h>
+#include <string.h>
+
+#include "private/process_internal.h"
+
+static mos_status_t mos_kernel_map_vm_status(vm_status_t status) {
+    switch (status) {
+        case VM_OK:
+            return MOS_OK;
+        case VM_ERR_NULL:
+            return MOS_ERR_NULL;
+        case VM_ERR_RANGE:
+            return MOS_ERR_RANGE;
+        case VM_ERR_STATE:
+            return MOS_ERR_STATE;
+        case VM_ERR_FULL:
+            return MOS_ERR_NO_SPACE;
+        case VM_ERR_BAD_ARG:
+            return MOS_ERR_INVALID;
+    }
+
+    return MOS_ERR_INVALID;
+}
+
 /*
  * LAB1 구현 안내
  * - mos_kernel_boot()에서 VM 생성, 커널 상태 전이, 하위 모듈 초기화 순서를 설계한다.
@@ -9,22 +33,77 @@
  */
 
 mos_status_t mos_kernel_boot(mos_kernel_t *kernel) {
-    (void)kernel;
-    return MOS_ERR_UNIMPLEMENTED;
+    vm_status_t vm_status;
+
+    if (kernel == NULL) {
+        return MOS_ERR_NULL;
+    }
+
+    memset(kernel, 0, sizeof(*kernel));
+    kernel->state = MOS_KERNEL_OFF;
+
+    vm_status = vm_machine_create(&kernel->machine);
+    if (vm_status != VM_OK) {
+        return mos_kernel_map_vm_status(vm_status);
+    }
+
+    kernel->state = MOS_KERNEL_BOOTED;
+    return MOS_OK;
 }
 
 mos_status_t mos_kernel_shutdown(mos_kernel_t *kernel) {
-    (void)kernel;
-    return MOS_ERR_UNIMPLEMENTED;
+    mos_process_table_t *table;
+    vm_status_t vm_status;
+
+    if (kernel == NULL) {
+        return MOS_ERR_NULL;
+    }
+    if (kernel->state != MOS_KERNEL_BOOTED) {
+        return MOS_ERR_STATE;
+    }
+
+    vm_status = vm_machine_destroy(&kernel->machine);
+    if (vm_status != VM_OK) {
+        return mos_kernel_map_vm_status(vm_status);
+    }
+
+    table = (mos_process_table_t *)kernel->private_state;
+    if (table != NULL) {
+        mos_vm_mapping_node_t *mapping = table->vm.head;
+
+        while (mapping != NULL) {
+            mos_vm_mapping_node_t *next = mapping->next;
+
+            free(mapping);
+            mapping = next;
+        }
+        free(table->memory.bitmap);
+        free(table);
+    }
+    kernel->private_state = NULL;
+    kernel->state = MOS_KERNEL_SHUTDOWN;
+    return MOS_OK;
 }
 
 mos_status_t mos_kernel_tick(mos_kernel_t *kernel) {
-    (void)kernel;
-    return MOS_ERR_UNIMPLEMENTED;
+    if (kernel == NULL) {
+        return MOS_ERR_NULL;
+    }
+    if (kernel->state != MOS_KERNEL_BOOTED) {
+        return MOS_ERR_STATE;
+    }
+
+    return mos_kernel_map_vm_status(vm_machine_tick(&kernel->machine));
 }
 
 mos_status_t mos_kernel_ticks(const mos_kernel_t *kernel, uint64_t *ticks_out) {
-    (void)kernel;
-    (void)ticks_out;
-    return MOS_ERR_UNIMPLEMENTED;
+    if (kernel == NULL || ticks_out == NULL) {
+        return MOS_ERR_NULL;
+    }
+    if (kernel->state != MOS_KERNEL_BOOTED) {
+        return MOS_ERR_STATE;
+    }
+
+    return mos_kernel_map_vm_status(
+        vm_machine_get_ticks(&kernel->machine, ticks_out));
 }
